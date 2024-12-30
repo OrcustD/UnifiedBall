@@ -1,0 +1,113 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run TrackNet with InpaintNet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test.py",
+            "args": ["--tracknet_file", "ckpts/TrackNet_best.pt", "--inpaintnet_file", "ckpts/InpaintNet_best.pt", "--save_dir", "eval", "--output_pred"],
+            "env": {"CUDA_VISIBLE_DEVICES": "7"}
+        },
+        {
+            "name": "Run TrackNet without InpaintNet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test.py",
+            "args": ["--tracknet_file", "ckpts/TrackNet_best.pt", "--save_dir", "eval", "--output_pred"],
+            "env": {"CUDA_VISIBLE_DEVICES": "7"}
+        },
+        {
+            "name": "Debug TrackNet without InpaintNet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test.py",
+            "args": ["--tracknet_file", "ckpts/TrackNet_best.pt", "--save_dir", "eval", "--output_pred", "--debug"],
+            "env": {"CUDA_VISIBLE_DEVICES": "7"}
+        },
+        {
+            "name": "Debug Train TrackNet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "args": [
+                "--model_name", "TrackNet",
+                "--seq_len", "8",
+                "--epochs", "1",
+                "--batch_size", "10",
+                "--bg_mode", "concat",
+                "--alpha", "0.5",
+                "--save_dir", "exp_debug",
+                "--verbose",
+                "--debug"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        },
+        {
+            "name": "Debug Resume Train TrackNet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "args": [
+                "--model_name", "TrackNet",
+                "--seq_len", "8",
+                "--epochs", "30",
+                "--batch_size", "10",
+                "--bg_mode", "concat",
+                "--alpha", "0.5",
+                "--save_dir", "exp_debug",
+                "--verbose",
+                "--debug",
+                "--resume"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        },
+        {
+            "name": "Debug Train VideoMamba",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "args": [
+                "--model_name", "VideoMamba",
+                "--seq_len", "8",
+                "--epochs", "1",
+                "--batch_size", "6",
+                "--bg_mode", "concat",
+                "--alpha", "0.5",
+                "--save_dir", "exp_debug",
+                "--verbose",
+                "--debug",
+                "--patch_size", "16",
+                "--d_shallow", "32",
+                "--d_model", "256",
+                "--depth", "4"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        },
+        {
+            "name": "Train VideoMamba",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "args": [
+                "--model_name", "VideoMamba",
+                "--seq_len", "8",
+                "--epochs", "30",
+                "--batch_size", "4",
+                "--bg_mode", "concat",
+                "--alpha", "0.5",
+                "--save_dir", "exp_debug",
+                "--verbose",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1"
+            }
+        }
+    ]
+}
