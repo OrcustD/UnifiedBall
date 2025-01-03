@@ -51,7 +51,8 @@ def build_match_rounds(video_names):
 if __name__ == '__main__':
     sport = 'tabletennis'
     annot_dir = f'data/annotations_raw/{sport}'
-    video_dir = f'/nas/shared/sport/donglinfeng/unified_ball_clips/{sport}'
+    # video_dir = f'/nas/shared/sport/donglinfeng/unified_ball_clips/{sport}'
+    video_dir = f'data/video_raw/{sport}'
     output_dir = f'data/{sport}/all'
     os.makedirs(output_dir, exist_ok=True)
 
