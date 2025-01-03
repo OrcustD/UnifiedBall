@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 import torch.backends.cudnn as cudnn
 
-from dataset import Shuttlecock_Trajectory_Dataset, UniBall_Dataset
+from dataset import Shuttlecock_Trajectory_Dataset
+from dataset_ball import UniBall_Dataset
 from test import eval_tracknet
 from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba
 from utils.metric import WBCELoss
@@ -161,38 +162,42 @@ def get_args():
     parser.add_argument('--d_model', type=int, default=8, help='patch embedding dim')
     parser.add_argument('--depth', type=int, default=2, help='number of mamba blocks')
     args = parser.parse_args()
+    
+    if args.data_type == 'UniBall':
+        args.last_only = True
+    
     return args
 
-def main():
-    # TODO: parallel model training
-    args = get_args()
-    init_distributed_mode(args)
-    device = torch.device(args.device)
-    seed = args.seed + get_rank()
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    cudnn.benchmark = True
-    cudnn.deterministic = True
+# def main():
+#     # TODO: parallel model training
+#     args = get_args()
+#     init_distributed_mode(args)
+#     device = torch.device(args.device)
+#     seed = args.seed + get_rank()
+#     torch.manual_seed(seed)
+#     np.random.seed(seed)
+#     cudnn.benchmark = True
+#     cudnn.deterministic = True
 
-    param_dict = vars(args)
-    num_tasks = get_world_size()
-    global_rank = get_rank()
+#     param_dict = vars(args)
+#     num_tasks = get_world_size()
+#     global_rank = get_rank()
 
-    train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
-    val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
-    sample_train = DistributedSampler(train_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True)
-    if args.dist_eval:
-        if len(val_dataset) % num_tasks != 0:
-            print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                    'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                    'equal num of samples per-process.')
-        sampler_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-    else:
-        sample_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+#     train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
+#     val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+#     sample_train = DistributedSampler(train_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True)
+#     if args.dist_eval:
+#         if len(val_dataset) % num_tasks != 0:
+#             print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+#                     'This will slightly alter validation results as extra duplicate entries are added to achieve '
+#                     'equal num of samples per-process.')
+#         sampler_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+#     else:
+#         sample_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
     
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
+#     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
+#     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
 
 
 if __name__ == '__main__':
@@ -281,7 +286,10 @@ if __name__ == '__main__':
         if args.lr_scheduler:
             scheduler.load_state_dict(ckpt['scheduler'])
         start_epoch = ckpt['epoch'] + 1
-        max_val_acc = ckpt['max_val_acc']
+        if 'max_val_acc' in ckpt:
+            max_val_acc = ckpt['max_val_acc']
+        else:
+            max_val_acc = 0.
         print(f'Resume training from epoch {start_epoch}...')
     else:
         max_val_acc = 0.
