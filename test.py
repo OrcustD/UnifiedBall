@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from pycocotools.coco import COCO
 from pycocotools.cocoeval import COCOeval
 
-from dataset import Shuttlecock_Trajectory_Dataset, data_dir
+from dataset import Shuttlecock_Trajectory_Dataset
 from utils.general import *
 from utils.metric import *
 
@@ -20,7 +20,6 @@ from utils.metric import *
 pred_types = ['TP', 'TN', 'FP1', 'FP2', 'FN']
 pred_types_map = {pred_type: i for i, pred_type in enumerate(pred_types)}
 inpaintnet_eval_types = ['inpaint', 'reconstruct', 'baseline']
-
 
 def get_ensemble_weight(seq_len, eval_mode):
     """ Get weight for temporal ensemble.
@@ -78,7 +77,7 @@ def predict_location(heatmap):
 
         return x, y, w, h
 
-def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolerance=4., img_scaler=(1, 1), output_bbox=False, output_gt=False):
+def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolerance=4., img_scaler=(1, 1), output_bbox=False, output_gt=False, last_only=False):
     """ Predict and output the result of each frame.
 
         Args:
@@ -339,11 +338,16 @@ def eval_tracknet(model, data_loader, param_dict):
         x, y = x.float().cuda(), y.float().cuda()
         with torch.no_grad():
             y_pred = model(x)
+        if param_dict['last_only']:
+            y_pred = y_pred[:, -1:, :, :]
+            i_ = i[:, -1:, :]
+        else:
+            i_ = i
 
         loss = WBCELoss(y_pred, y)
         losses.append(loss.item())
 
-        pred_dict = evaluate(i, y_true=y, y_pred=y_pred, tolerance=param_dict['tolerance'])
+        pred_dict = evaluate(i_, y_true=y, y_pred=y_pred, tolerance=param_dict['tolerance'])
         confusion_matrix += get_eval_res(pred_dict)
         
         if param_dict['verbose']:
@@ -438,7 +442,7 @@ def eval_inpaintnet(model, data_loader, param_dict):
     return float(np.mean(losses)), res_dict
 
 # For testing evaluation
-def get_coco_res(pred_dict, drop=False):
+def get_coco_res(pred_dict, data_dir, drop=False):
     """ Parse prediction result and get evaluation result.
 
         Args:
@@ -920,7 +924,10 @@ if __name__ == '__main__':
     parser.add_argument('--verbose', action='store_true', default=False)
     parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--linear_interp', action='store_true', default=False)
+    parser.add_argument('--data_dir', type=str, default='datasets/TrackNetV2', help='directory of dataset')
     args = parser.parse_args()
+
+    data_dir = args.data_dir
 
     param_dict = vars(args)
     param_dict['num_workers'] = args.batch_size if args.batch_size <= 16 else 16
@@ -998,9 +1005,9 @@ if __name__ == '__main__':
         if args.output_bbox:
             coco_file = os.path.join(args.save_dir, f'{args.split}_coco_res_{args.eval_mode}.json')
             if args.split == 'test':
-                dect_list = get_coco_res(pred_dict, drop=True)
+                dect_list = get_coco_res(pred_dict, data_dir, drop=True)
             else:
-                dect_list = get_coco_res(pred_dict, drop=False)
+                dect_list = get_coco_res(pred_dict, data_dir, drop=False)
             
             mAP = {0.25:0, 0.5:0}
             coco_gt = COCO(os.path.join(data_dir, 'coco_format_gt.json'))

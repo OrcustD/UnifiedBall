@@ -9,7 +9,8 @@ import pandas as pd
 
 from collections import deque
 from PIL import Image, ImageDraw
-from model import TrackNet, InpaintNet
+from model import TrackNet
+from timm.models import create_model
 
 # Global variables
 HEIGHT = 288
@@ -40,9 +41,49 @@ class ResumeArgumentParser():
         self.save_dir = param_dict['save_dir']
         self.debug = param_dict['debug']
         self.verbose = param_dict['verbose']
+        self.data_dir = param_dict['data_dir']
 
 
 ###################################  Helper Functions ###################################
+def get_model_videomamba(args):
+    """ Create model by name and the configuration parameter.
+
+        Args:
+            model_size (str): type of model size to create
+                Choices:
+                    - 'debug': Return model embed dim=96, depth=2
+                    - 'tiny': Return model embed dim=192, depth=8
+                    - 'small': Return model embed dim=384, depth=24
+                    - 'moddle': Return model embed dim=576, depth=32
+            seq_len (int, optional): Length of input sequence of TrackNet
+            bg_mode (str, optional): Background mode of TrackNet
+                Choices:
+                    - '': Return TrackNet with L x 3 input channels (RGB)
+                    - 'subtract': Return TrackNet with L x 1 input channel (Difference frame)
+                    - 'subtract_concat': Return TrackNet with L x 4 input channels (RGB + Difference frame)
+                    - 'concat': Return TrackNet with (L+1) x 3 input channels (RGB)
+
+        Returns:
+            model (torch.nn.Module): Model with specified configuration
+    """
+    model = create_model(
+        'videomamba',
+        img_size=(288, 512),
+        pretrained=False,
+        fc_drop_rate=0.0,
+        drop_path_rate=0.1,
+        kernel_size=1,
+        use_checkpoint=False,
+        checkpoint_num=0,
+        patch_size=args['patch_size'],
+        embed_dim=args['d_model'],
+        shallow_dim=args['d_shallow'],
+        depth=args['depth'],
+        num_frames=args['seq_len'],
+    )
+    print("VideoMamba args = %s" % str(args))
+    return model
+
 def get_model(model_name, seq_len=None, bg_mode=None):
     """ Create model by name and the configuration parameter.
 
@@ -72,8 +113,6 @@ def get_model(model_name, seq_len=None, bg_mode=None):
             model = TrackNet(in_dim=(seq_len+1)*3, out_dim=seq_len)
         else:
             model = TrackNet(in_dim=seq_len*3, out_dim=seq_len)
-    elif model_name == 'InpaintNet':
-        model = InpaintNet()
     else:
         raise ValueError('Invalid model name.')
     

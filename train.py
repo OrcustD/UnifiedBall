@@ -6,15 +6,16 @@ from tqdm import tqdm
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
+import torch.backends.cudnn as cudnn
 
-from dataset import Shuttlecock_Trajectory_Dataset
-from test import eval_tracknet, eval_inpaintnet
-from utils.general import ResumeArgumentParser, get_model, to_img_format
+from dataset import Shuttlecock_Trajectory_Dataset, UniBall_Dataset
+from test import eval_tracknet
+from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba
 from utils.metric import WBCELoss
 from utils.visualize import plot_heatmap_pred_sample, plot_traj_pred_sample, write_to_tb
-
+from utils.distribution import init_distributed_mode, get_rank, get_world_size
 
 def mixup(x, y, alpha=0.5):
     """Returns mixed inputs, pairs of targets.
@@ -56,7 +57,7 @@ def get_random_mask(mask_size, mask_ratio):
 
     return mask
 
-def train_tracknet(model, optimizer, data_loader, param_dict):
+def train_tracknet(model, optimizer, data_loader, param_dict, exp_name, tb_writer=None, last_only=False, curr_step=0):
     """ Train TrackNet model for one epoch.
 
         Args:
@@ -90,10 +91,16 @@ def train_tracknet(model, optimizer, data_loader, param_dict):
             x, y = mixup(x, y, param_dict['alpha'])
         
         y_pred = model(x)
+        if last_only:
+            y_pred = y_pred[:, -1:, :, :]
         loss = WBCELoss(y_pred, y)
         epoch_loss.append(loss.item())
         loss.backward()
         optimizer.step()
+        
+        if tb_writer is not None:
+            tb_writer.add_scalars(f"Train_Loss/WBCE", {f'{exp_name}': loss.item()}, curr_step+step)
+            tb_writer.flush()
 
         if param_dict['verbose'] and (step + 1) % display_step == 0:
             data_prob.set_description(f'Training')
@@ -114,72 +121,21 @@ def train_tracknet(model, optimizer, data_loader, param_dict):
                 x = x[:, 1:, :, :, :]
             else:
                 x = to_img_format(x, num_ch=3)
-            y = to_img_format(y)
-            y_pred = to_img_format(y_pred)
-            plot_heatmap_pred_sample(x[0], y[0], y_pred[0], c[0], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'])
+            
+            if last_only:
+                y = to_img_format(y)
+                y_pred = to_img_format(y_pred[:, -1:, :, :])
+                plot_heatmap_pred_sample(x[0][-1:], y[0][-1:], y_pred[0][-1:], c[0][-1:], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name)
+            else:
+                y = to_img_format(y)
+                y_pred = to_img_format(y_pred)
+                plot_heatmap_pred_sample(x[0], y[0], y_pred[0], c[0], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name)
     
-    return float(np.mean(epoch_loss))
-   
-def train_inpaintnet(model, optimizer, data_loader, param_dict):
-    """ Train InpaintNet model for one epoch.
+    return float(np.mean(epoch_loss)), step+curr_step
 
-        Args:
-            model (torch.nn.Module): InpaintNet model
-            optimizer (torch.optim): Optimizer
-            data_loader (torch.utils.data.DataLoader): Data loader
-            param_dict (Dict): parameters
-                - param_dict['verbose'] (bool): Control whether to show progress bar
-                - param_dict['mask_ratio'] (float): Ratio of masked area
-                - param_dict['save_dir'] (str): For saving current prediction
-
-        Returns:
-            (float): Average loss
-    """
-
-    model.train()
-    epoch_loss = []
-
-    if param_dict['verbose']:
-        data_prob = tqdm(data_loader)
-    else:
-        data_prob = data_loader
-
-    for step, (_, coor_pred, coor_gt, _, vis_gt, _) in enumerate(data_prob):
-        optimizer.zero_grad()
-        coor_pred, coor_gt, vis_gt = coor_pred.float().cuda(), coor_gt.float().cuda(), vis_gt.float().cuda()
-
-        # Sample random mask as inpainting mask
-        mask = get_random_mask(mask_size=coor_gt.shape[:2], mask_ratio=param_dict['mask_ratio']).cuda() # (N, L, 1)
-        inpaint_mask = torch.logical_and(vis_gt, mask).int() # visible and masked area
-        
-        coor_pred = coor_pred * (1 - inpaint_mask) # masked area is set to 0
-        refine_coor = model(coor_pred, inpaint_mask)
-
-        # Calculate masked loss
-        masked_refine_coor = refine_coor * inpaint_mask
-        masked_gt_coor = coor_gt * inpaint_mask
-        loss = nn.MSELoss()(masked_refine_coor, masked_gt_coor)
-        epoch_loss.append(loss.item())
-
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 1)
-        optimizer.step()
-        
-        if param_dict['verbose'] and (step + 1) % display_step == 0:
-            data_prob.set_description(f'Training')
-            data_prob.set_postfix(loss=loss.item())
-
-        # Visualize current prediction
-        if (step + 1) % display_step == 0:
-            coor_gt, refine_coor, inpaint_mask = coor_gt.detach().cpu().numpy(), refine_coor.detach().cpu().numpy(), inpaint_mask.detach().cpu().numpy()
-            plot_traj_pred_sample(coor_gt[0], refine_coor[0], inpaint_mask[0], save_dir=param_dict['save_dir'])
-    
-    return float(np.mean(epoch_loss))
-
-
-if __name__ == '__main__':
+def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_name', type=str, default='TrackNet', choices=['TrackNet', 'InpaintNet'], help='model type')
+    parser.add_argument('--model_name', type=str, default='TrackNet', choices=['TrackNet', 'VideoMamba'], help='model type')
     parser.add_argument('--seq_len', type=int, default=8, help='sequence length of input')
     parser.add_argument('--epochs', type=int, default=3, help='number of epochs')
     parser.add_argument('--batch_size', type=int, default=10, help='batch size of training')
@@ -196,7 +152,51 @@ if __name__ == '__main__':
     parser.add_argument('--save_dir', type=str, default='exp', help='directory to save the checkpoints and prediction result')
     parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--verbose', action='store_true', default=False)
+    parser.add_argument('--data_dir', type=str, default='datasets/TrackNetV2', help='directory of dataset')
+    parser.add_argument('--data_type', type=str, default='TrackNet', choices=['TrackNet', 'UniBall'], help='dataset type')
+    parser.add_argument('--last_only', action='store_true', default=False, help='only predict last frame result')
+    # VideoMamba args
+    parser.add_argument('--patch_size', type=int, default=8, help='patch size')
+    parser.add_argument('--d_shallow', type=int, default=3, help='image shallow embedding dim')
+    parser.add_argument('--d_model', type=int, default=8, help='patch embedding dim')
+    parser.add_argument('--depth', type=int, default=2, help='number of mamba blocks')
     args = parser.parse_args()
+    return args
+
+def main():
+    # TODO: parallel model training
+    args = get_args()
+    init_distributed_mode(args)
+    device = torch.device(args.device)
+    seed = args.seed + get_rank()
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    cudnn.benchmark = True
+    cudnn.deterministic = True
+
+    param_dict = vars(args)
+    num_tasks = get_world_size()
+    global_rank = get_rank()
+
+    train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
+    val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+    sample_train = DistributedSampler(train_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True)
+    if args.dist_eval:
+        if len(val_dataset) % num_tasks != 0:
+            print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+                    'This will slightly alter validation results as extra duplicate entries are added to achieve '
+                    'equal num of samples per-process.')
+        sampler_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+    else:
+        sample_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+    
+    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
+
+
+if __name__ == '__main__':
+    args = get_args()
     param_dict = vars(args)
 
     np.random.seed(args.seed)
@@ -222,20 +222,41 @@ if __name__ == '__main__':
         ckpt['param_dict']['resume_training'] = args.resume_training
         ckpt['param_dict']['epochs'] = args.epochs
         ckpt['param_dict']['verbose'] = args.verbose
+        ckpt['param_dict']['save_dir'] = args.save_dir
+        ckpt['param_dict']['data_dir'] = args.data_dir
         args = ResumeArgumentParser(ckpt['param_dict'])
 
     print(f'Parameters: {param_dict}')
     print(f'Load dataset...')
-    data_mode = 'heatmap' if args.model_name == 'TrackNet' else 'coordinate'
-    train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
-    val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+    data_mode = 'heatmap'
+    if args.data_type == 'TrackNet':
+        train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
+        val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+    elif args.data_type == 'UniBall':
+        train_dataset = UniBall_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
+        val_dataset = UniBall_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
 
     print(f'Create {args.model_name}...')
-    model = get_model(args.model_name, args.seq_len, args.bg_mode).cuda() if args.model_name == 'TrackNet' else get_model(args.model_name).cuda()
-    train_fn = train_tracknet if args.model_name == 'TrackNet' else train_inpaintnet
-    eval_fn = eval_tracknet if args.model_name == 'TrackNet' else eval_inpaintnet
+    exp_name = ''
+    if args.model_name == 'VideoMamba':
+        mamba_args = dict(
+            patch_size=args.patch_size,
+            d_shallow=args.d_shallow,
+            d_model=args.d_model,
+            depth=args.depth,
+            seq_len=args.seq_len+1,
+        )
+        model = get_model_videomamba(mamba_args).cuda()
+        exp_name = f'{args.model_name}_p{args.patch_size}_dp{args.d_model}_ds{args.d_shallow}_depth{args.depth}'
+    else:
+        model = get_model(args.model_name, args.seq_len, args.bg_mode).cuda()
+        exp_name = f'{args.model_name}_{args.data_type}_l{args.seq_len}_{data_mode}_{args.bg_mode}'
+    
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print('number of model params:', n_parameters)
 
     # Create optimizer
     if args.optim == 'Adam':
@@ -269,18 +290,19 @@ if __name__ == '__main__':
 
     print(f'Start training...')
     train_start_time = time.time()
+    curr_step = 0
     for epoch in range(start_epoch, args.epochs):
         print(f'Epoch [{epoch+1} / {args.epochs}]')
         start_time = time.time()
-        train_loss = train_fn(model, optimizer, train_loader, param_dict)
-        val_loss, val_res = eval_fn(model, val_loader, param_dict)
-        write_to_tb(args.model_name, tb_writer, (train_loss, val_loss), val_res, epoch)
+        train_loss, curr_step = train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=tb_writer, last_only=args.last_only, curr_step=curr_step)
+        val_loss, val_res = eval_tracknet(model, val_loader, param_dict)
+        write_to_tb(exp_name, tb_writer, (train_loss, val_loss), val_res, epoch, curr_step)
 
         if args.lr_scheduler:
             scheduler.step()
         
         # Pick best model
-        cur_val_acc = val_res['accuracy'] if args.model_name == 'TrackNet' else val_res['inpaint']['accuracy']
+        cur_val_acc = val_res['accuracy']
         if cur_val_acc >= max_val_acc:
             max_val_acc = cur_val_acc
             torch.save(dict(epoch=epoch,

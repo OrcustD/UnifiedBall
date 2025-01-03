@@ -4,11 +4,9 @@ import parse
 import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
-
-from dataset import data_dir
 from utils.general import *
 
-def write_to_tb(model_type, tb_writer, losses, val_res, epoch):
+def write_to_tb(model_type, tb_writer, losses, val_res, epoch, step):
     """ Write training and validation results to tensorboard. 
 
         Args:
@@ -22,53 +20,17 @@ def write_to_tb(model_type, tb_writer, losses, val_res, epoch):
         Returns:
             None
     """
-
-    if model_type == 'TrackNet':
-        tb_writer.add_scalars(f"{model_type}_Loss/WBCE", {'train': losses[0],
-                                                          'val': losses[1]}, epoch)
-        tb_writer.add_scalar(f"{model_type}_Metric/Accurcy", val_res['accuracy'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Metric/Precision", val_res['precision'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Metric/Recall", val_res['recall'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Metric/F1-score", val_res['f1'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Metric/Miss_Rate", val_res['miss_rate'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Results/TP", val_res['TP'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Results/TN", val_res['TN'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Results/FP1", val_res['FP1'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Results/FP2", val_res['FP2'], epoch)
-        tb_writer.add_scalar(f"{model_type}_Results/FN", val_res['FN'], epoch)
-    else:
-        tb_writer.add_scalars(f"{model_type}_Loss/MSE", {'train': losses[0],
-                                                         'val': losses[1]}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Metric/Accurcy", {'val_refine': val_res['inpaint']['accuracy'],
-                                                        'val_reconstruct': val_res['reconstruct']['accuracy'],
-                                                        'val_baseline': val_res['baseline']['accuracy']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Metric/Precision", {'val_refine': val_res['inpaint']['precision'],
-                                                          'val_reconstruct': val_res['reconstruct']['precision'],
-                                                          'val_baseline': val_res['baseline']['precision']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Metric/Recall", {'val_refine': val_res['inpaint']['recall'],
-                                                       'val_reconstruct': val_res['reconstruct']['recall'],
-                                                       'val_baseline': val_res['baseline']['recall']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Metric/F1-score", {'val_refine': val_res['inpaint']['f1'],
-                                                         'val_reconstruct': val_res['reconstruct']['f1'],
-                                                         'val_baseline': val_res['baseline']['f1']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Metric/Miss_Rate", {'val_refine': val_res['inpaint']['miss_rate'],
-                                                          'val_reconstruct': val_res['reconstruct']['miss_rate'],
-                                                          'val_baseline': val_res['baseline']['miss_rate']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Results/TP", {'val_refine': val_res['inpaint']['TP'],
-                                                                    'val_reconstruct': val_res['reconstruct']['TP'],
-                                                                    'val_baseline': val_res['baseline']['TP']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Results/TN", {'val_refine': val_res['inpaint']['TN'],
-                                                                    'val_reconstruct': val_res['reconstruct']['TN'],
-                                                                    'val_baseline': val_res['baseline']['TN']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Results/FP1", {'val_refine': val_res['inpaint']['FP1'],
-                                                                     'val_reconstruct': val_res['reconstruct']['FP1'],
-                                                                     'val_baseline': val_res['baseline']['FP1']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Results/FP2", {'val_refine': val_res['inpaint']['FP2'],
-                                                                     'val_reconstruct': val_res['reconstruct']['FP2'],
-                                                                     'val_baseline': val_res['baseline']['FP2']}, epoch)
-        tb_writer.add_scalars(f"{model_type}_Results/FN", {'val_refine': val_res['inpaint']['FN'],
-                                                                    'val_reconstruct': val_res['reconstruct']['FN'],
-                                                                    'val_baseline': val_res['baseline']['FN']}, epoch)
+    tb_writer.add_scalars(f"Val_Loss/WBCE", {model_type: losses[1]}, step)
+    tb_writer.add_scalars(f"Metric/Accurcy", {model_type: val_res['accuracy']}, epoch)
+    tb_writer.add_scalars(f"Metric/Precision", {model_type: val_res['precision']}, epoch)
+    tb_writer.add_scalars(f"Metric/Recall", {model_type: val_res['recall']}, epoch)
+    tb_writer.add_scalars(f"Metric/F1-score", {model_type: val_res['f1']}, epoch)
+    tb_writer.add_scalars(f"Metric/Miss_Rate", {model_type: val_res['miss_rate']}, epoch)
+    tb_writer.add_scalars(f"Results/TP", {model_type: val_res['TP']}, epoch)
+    tb_writer.add_scalars(f"Results/TN", {model_type: val_res['TN']}, epoch)
+    tb_writer.add_scalars(f"Results/FP1", {model_type: val_res['FP1']}, epoch)
+    tb_writer.add_scalars(f"Results/FP2", {model_type: val_res['FP2']}, epoch)
+    tb_writer.add_scalars(f"Results/FN", {model_type: val_res['FN']}, epoch)
     tb_writer.flush()
 
 def plot_median_files(data_dir):
@@ -100,7 +62,7 @@ def plot_median_files(data_dir):
                     median = np.load(os.path.join(rally_dir, 'median.npz'))['median'][..., ::-1] # BGR to RGB
                     cv2.imwrite(os.path.join(data_dir, 'median', f'{split}_m{match_id}_r{rally_id}.{IMG_FORMAT}'), median)
 
-def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir):
+def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None, exp_name=None):
     """ Visualize input and output of TrackNet and save as a gif. Including 4 subplots:
             Top left: Frames sequence with ball coordinate marked
             Top right: Ground-truth heatmap sequence
@@ -131,6 +93,8 @@ def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir):
     y_m = to_img(y_map)
     
     # Write image sequence to gif
+    if not os.path.exists(f'{save_dir}/{exp_name}'):
+        os.makedirs(f'{save_dir}/{exp_name}')
     for f in range(c.shape[0]):
         # Convert grayscale image to BGR image for concatenation
         tmp_x = cv2.cvtColor(x[f], cv2.COLOR_GRAY2BGR) if bg_mode == 'subtract' else x[f]
@@ -150,7 +114,10 @@ def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir):
         # Cast cv image to PIL image for saving gif format
         img = Image.fromarray(img)
         imgs.append(img)
-        imgs[0].save(f'{save_dir}/cur_pred_TrackNet.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
+        if curr_step:
+            imgs[0].save(f'{save_dir}/{exp_name}/{curr_step}.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
+        else:
+            imgs[0].save(f'{save_dir}/{exp_name}/all.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
 
 def plot_traj_pred_sample(coor_gt, coor_inpaint, inpaint_mask, save_dir=''):
     """ Visualize input and output of InpaintNet and save as a image.
@@ -176,7 +143,7 @@ def plot_traj_pred_sample(coor_gt, coor_inpaint, inpaint_mask, save_dir=''):
     
     cv2.imwrite(f'{save_dir}/cur_pred_InpaintNet.{IMG_FORMAT}', img)
 
-def plot_diff_hist(pred_dict_base, pred_dict_refine, split, save_dir):
+def plot_diff_hist(pred_dict_base, pred_dict_refine, split, save_dir, data_dir):
     """ Plot difference histogram. (difference is calculated in input space)
 
         Args:
