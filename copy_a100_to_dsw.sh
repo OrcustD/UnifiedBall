@@ -1,0 +1,1 @@
+rclone copy --progress --ignore-existing a100:pjlab-lingjun-gvlab-a100/unified_ball/batch2_clips/tabletennis /nas/shared/sport/donglinfeng/unified_ball_clips/tabletennis
