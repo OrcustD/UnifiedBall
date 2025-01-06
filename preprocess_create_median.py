@@ -8,7 +8,7 @@ from tqdm import tqdm
 import json
 
 def vis_median_frame(median):
-    cv2.imwrite('median.png', median[..., ::-1])  # Convert RGB to BGR for saving
+    cv2.imwrite('median.png', median)
 
 
 def get_match_median(match_dir, vis_dir):
@@ -43,7 +43,7 @@ def get_match_median(match_dir, vis_dir):
     # Calculate the median of all rally medians
     median = np.median(np.array(medians), 0)
     np.savez(os.path.join(match_dir, 'median.npz'), median=median) # Must be lossless, do not save as image format
-    cv2.imwrite(f'{vis_dir}/{match_id}_median.png', median[..., ::-1])  # Convert RGB to BGR for saving
+    cv2.imwrite(f'{vis_dir}/{match_id}_median.png', median)
 
 def get_rally_median(image_dir):
     """ Generate and save the rally median frame to the corresponding rally directory.
@@ -60,11 +60,31 @@ def get_rally_median(image_dir):
 
     # Get all .jpg file paths under image_dir
     
-    frames = load_images_in_parallel(image_dir, format='RGB')
+    frames = load_images_in_parallel(image_dir)
     
     # Calculate the median of all frames
     median = np.median(np.array(frames), 0)
     np.savez(os.path.join(image_dir, 'median.npz'), median=median) # Must be lossless, do not save as image format
+
+def convert_median_RGB_to_BGR(data_dir):
+    """ Convert the median frame from RGB to BGR for all matches.
+
+        Args:
+            data_dir (str): File path of data directory
+                Format: '{data_dir}/{split}'
+        
+        Returns:
+            None
+    """
+    median_files = []
+    for root, dirs, files in os.walk(data_dir):
+        for file in files:
+            if file == 'median.npz':
+                median_files.append(os.path.join(root, file))
+    for median_file in tqdm(median_files):
+        median = np.load(median_file)['median']
+        np.savez(median_file, median=median[..., ::-1]) # Must be lossless, do not save as image format
+
 
 def main(data_dir, vis_dir):
     """ Generate and save the median frame for each rally and match.

@@ -51,7 +51,8 @@ def plot_median_files(data_dir):
             file_format_str = os.path.join('{}', 'match{}')
             _, match_id = parse.parse(file_format_str, match_dir)
             if os.path.exists(os.path.join(data_dir, split, f'match{match_id}', 'median.npz')):
-                median = np.load(os.path.join(data_dir, split, f'match{match_id}', 'median.npz'))['median'][..., ::-1] # BGR to RGB
+                # median = np.load(os.path.join(data_dir, split, f'match{match_id}', 'median.npz'))['median'][..., ::-1] # BGR to RGB
+                median = np.load(os.path.join(data_dir, split, f'match{match_id}', 'median.npz'))['median']
                 cv2.imwrite(os.path.join(data_dir, 'median', f'{split}_m{match_id}.{IMG_FORMAT}'), median)
             rally_dirs = list_dirs(os.path.join(match_dir, 'frame'))
             # For each rally
@@ -59,10 +60,11 @@ def plot_median_files(data_dir):
                 file_format_str = os.path.join('{}', 'frame', '{}')
                 _, rally_id = parse.parse(file_format_str, rally_dir)
                 if os.path.exists(os.path.join(rally_dir, 'median.npz')):
-                    median = np.load(os.path.join(rally_dir, 'median.npz'))['median'][..., ::-1] # BGR to RGB
+                    # median = np.load(os.path.join(rally_dir, 'median.npz'))['median'][..., ::-1] # BGR to RGB
+                    median = np.load(os.path.join(rally_dir, 'median.npz'))['median']
                     cv2.imwrite(os.path.join(data_dir, 'median', f'{split}_m{match_id}_r{rally_id}.{IMG_FORMAT}'), median)
 
-def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None, exp_name=None):
+def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None, exp_name=None, output_type='gif'):
     """ Visualize input and output of TrackNet and save as a gif. Including 4 subplots:
             Top left: Frames sequence with ball coordinate marked
             Top right: Ground-truth heatmap sequence
@@ -104,7 +106,7 @@ def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None,
         assert tmp_x.shape == tmp_y.shape == tmp_pred.shape == tmp_map.shape
 
         # Mark ground-truth label
-        cv2.circle(tmp_x, (int(c[f][0] * WIDTH), int(c[f][1] * HEIGHT)), 2, (255, 0, 0), -1)
+        cv2.circle(tmp_x, (int(c[f][0] * WIDTH), int(c[f][1] * HEIGHT)), 2, (0, 0, 255), -1)
 
         # Concatenate 4 subplots
         up_img = cv2.hconcat([tmp_x, tmp_y])
@@ -112,12 +114,16 @@ def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None,
         img = cv2.vconcat([up_img, down_img])
 
         # Cast cv image to PIL image for saving gif format
-        img = Image.fromarray(img)
-        imgs.append(img)
-        if curr_step:
-            imgs[0].save(f'{save_dir}/{exp_name}/{curr_step}.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
+        if output_type == 'gif':
+            img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            imgs.append(img)
+            if curr_step:
+                imgs[0].save(f'{save_dir}/{exp_name}/{curr_step}.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
+            else:
+                imgs[0].save(f'{save_dir}/{exp_name}/all.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
         else:
-            imgs[0].save(f'{save_dir}/{exp_name}/all.gif', format='GIF', save_all=True, append_images=imgs[1:], duration=1000, loop=0)
+            save_name = f'{save_dir}/{exp_name}/{curr_step}.jpg' if curr_step else f'{save_dir}/{exp_name}/all.jpg'
+            cv2.imwrite(save_name, img)
 
 def plot_traj_pred_sample(coor_gt, coor_inpaint, inpaint_mask, save_dir=''):
     """ Visualize input and output of InpaintNet and save as a image.

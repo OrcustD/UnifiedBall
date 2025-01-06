@@ -132,5 +132,31 @@
                 "CUDA_VISIBLE_DEVICES": "1"
             }
         },
+        {
+            "name": "Debug DDP Train TableTennis Tracknet",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "torch.distributed.launch",
+            "args": [
+                "--nproc_per_node", "2",
+                "${workspaceFolder}/train.py",
+                "--data_type", "UniBall",
+                "--data_dir", "data/tabletennis",
+                "--model_name", "TrackNet",
+                "--seq_len", "4",
+                "--epochs", "3",
+                "--batch_size", "4",
+                "--bg_mode", "concat",
+                "--alpha", "-1",
+                "--save_dir", "exp_debug",
+                "--verbose",
+                "--debug",
+                "--last_only"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "1,2"
+            },
+            "console": "integratedTerminal",
+        },
     ]
 }

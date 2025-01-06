@@ -3,7 +3,7 @@ import cv2
 import parse
 import numpy as np
 import pandas as pd
-from PIL import Image
+# from PIL import Image
 from tqdm import tqdm
 from torch.utils.data import Dataset
 from utils.data_io import load_images
@@ -29,6 +29,7 @@ class UniBall_Dataset(Dataset):
         SIGMA=2.5,
         median=None,
         img_format='jpg',
+        heatmap_mode='gaussian',
     ):
         """ Initialize the dataset
 
@@ -63,12 +64,15 @@ class UniBall_Dataset(Dataset):
         assert bg_mode in ['', 'subtract', 'subtract_concat', 'concat'], f'Invalid bg_mode: {bg_mode}, should be "", subtract, subtract_concat or concat'
 
         # Image size
-        self.metainfo = json.load(open(f'{root_dir}/info/metainfo.json'))
-        # self.HEIGHT, self.WIDTH, channels = metainfo['image_shape']
+        self.metainfo = {}
+        if os.path.exists(f'{root_dir}/info/metainfo.json'):
+            self.metainfo = json.load(open(f'{root_dir}/info/metainfo.json'))
+
         self.HEIGHT, self.WIDTH = height, width
         self.img_format = img_format
 
         # Gaussian heatmap parameters
+        self.heatmap_mode = heatmap_mode
         self.mag = 1
         self.sigma = SIGMA
 
@@ -93,8 +97,9 @@ class UniBall_Dataset(Dataset):
                 if median is None:
                     median = np.median(self.frame_arr, 0)
                 if self.bg_mode == 'concat':
-                    median = Image.fromarray(median.astype('uint8'))
-                    median = np.array(median.resize(size=(self.WIDTH, self.HEIGHT)))
+                    median = cv2.resize(median, (self.WIDTH, self.HEIGHT))
+                    # median = Image.fromarray(median.astype('uint8'))
+                    # median = np.array(median.resize(size=(self.WIDTH, self.HEIGHT)))
                     self.median = np.moveaxis(median, -1, 0)
                 else:
                     self.median = median
@@ -139,7 +144,7 @@ class UniBall_Dataset(Dataset):
         """ Generate rally image configuration file. """
         if 'image_shape' in self.metainfo:
             num_rally = len(self.rally_dict['i2p'])
-            w, h, c = self.metainfo['image_shape']
+            h, w, c = self.metainfo['image_shape']
             w_scaler, h_scaler = w / self.WIDTH, h / self.HEIGHT
             img_scaler = [(w_scaler, h_scaler)] * num_rally
             img_shape = [(w, h)] * num_rally
@@ -147,7 +152,10 @@ class UniBall_Dataset(Dataset):
             img_scaler = [] # (num_rally, 2)
             img_shape = [] # (num_rally, 2)
             for rally_i, rally_dir in tqdm(self.rally_dict['i2p'].items()):
-                w, h = Image.open(os.path.join(rally_dir, f'0000.{self.img_format}')).size
+                # w, h = Image.open(os.path.join(rally_dir, f'0000.{self.img_format}')).size
+                h, w, c = cv2.imread(os.path.join(rally_dir, f'0000.{self.img_format}')).shape
+                if (w != 1920) or (h != 1080):
+                    print(f'{rally_dir} is ({w}, {h}), not (1920, 1080)!')
                 w_scaler, h_scaler = w / self.WIDTH, h / self.HEIGHT
                 img_scaler.append((w_scaler, h_scaler))
                 img_shape.append((w, h))
@@ -197,6 +205,8 @@ class UniBall_Dataset(Dataset):
             first_index = fid - (self.seq_len-1) * self.sliding_step
             if first_index < 0:
                 continue
+            # if first_index < 1:
+            #     continue
             tmp_idx, tmp_frames, tmp_coor, tmp_vis = [], [], [], []
             # Construct a single input sequence
             for curr_i in range(first_index, fid+1, self.sliding_step):
@@ -239,10 +249,20 @@ class UniBall_Dataset(Dataset):
         """ Generate a Gaussian heatmap centered at (cx, cy). """
         if cx == cy == 0:
             return np.zeros((1, self.HEIGHT, self.WIDTH))
-        x, y = np.meshgrid(np.linspace(1, self.WIDTH, self.WIDTH), np.linspace(1, self.HEIGHT, self.HEIGHT))
-        heatmap = ((y - (cy + 1))**2) + ((x - (cx + 1))**2)
-        heatmap[heatmap <= self.sigma**2] = 1.
-        heatmap[heatmap > self.sigma**2] = 0.
+        if self.heatmap_mode == 'hard':
+            x, y = np.meshgrid(np.linspace(1, self.WIDTH, self.WIDTH), np.linspace(1, self.HEIGHT, self.HEIGHT))
+            heatmap = ((y - (cy + 1))**2) + ((x - (cx + 1))**2)
+            heatmap[heatmap <= self.sigma**2] = 1.
+            heatmap[heatmap > self.sigma**2] = 0.
+        elif self.heatmap_mode == 'gaussian':
+            x = np.arange(self.WIDTH)
+            y = np.arange(self.HEIGHT)
+            xx, yy = np.meshgrid(x, y)
+            dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+            heatmap = np.exp(-0.5 * (dist / self.sigma) ** 2)
+            heatmap = heatmap / np.max(heatmap)
+        else:
+            raise NotImplementedError
         heatmap = heatmap * self.mag
         return heatmap.reshape(1, self.HEIGHT, self.WIDTH)
     
@@ -324,20 +344,27 @@ class UniBall_Dataset(Dataset):
             # Process the frame sequence
             frames = np.array([]).reshape(0, self.HEIGHT, self.WIDTH)
             for i in range(self.seq_len):
-                img = Image.fromarray(imgs[i])
+                # img = Image.fromarray(imgs[i])
+                img = imgs[i]
                 if self.bg_mode == 'subtract':
-                    img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
-                    img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    # img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
+                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    img = np.sum(np.absolute(img - median_img), 2)
+                    img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = img.reshape(1, self.HEIGHT, self.WIDTH)
                 elif self.bg_mode == 'subtract_concat':
-                    diff_img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
-                    diff_img = np.array(diff_img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    # diff_img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
+                    # diff_img = np.array(diff_img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    diff_img = np.sum(np.absolute(img - median_img), 2)
+                    diff_img = cv2.resize(diff_img, (self.WIDTH, self.HEIGHT))
                     diff_img = diff_img.reshape(1, self.HEIGHT, self.WIDTH)
-                    img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = np.moveaxis(img, -1, 0)
                     img = np.concatenate((img, diff_img), axis=0)
                 else:
-                    img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
+                    img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = np.moveaxis(img, -1, 0)
                 
                 frames = np.concatenate((frames, img), axis=0)

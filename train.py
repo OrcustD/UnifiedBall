@@ -6,9 +6,11 @@ from tqdm import tqdm
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, DistributedSampler
 from torch.utils.tensorboard import SummaryWriter
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, DistributedSampler
 
 from dataset import Shuttlecock_Trajectory_Dataset
 from dataset_ball import UniBall_Dataset
@@ -16,7 +18,7 @@ from test import eval_tracknet
 from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba
 from utils.metric import WBCELoss
 from utils.visualize import plot_heatmap_pred_sample, plot_traj_pred_sample, write_to_tb
-from utils.distribution import init_distributed_mode, get_rank, get_world_size
+from utils.distribution import init_distributed_mode
 
 def mixup(x, y, alpha=0.5):
     """Returns mixed inputs, pairs of targets.
@@ -58,7 +60,7 @@ def get_random_mask(mask_size, mask_ratio):
 
     return mask
 
-def train_tracknet(model, optimizer, data_loader, param_dict, exp_name, tb_writer=None, last_only=False, curr_step=0):
+def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=None, last_only=False, curr_step=0, display_step=100):
     """ Train TrackNet model for one epoch.
 
         Args:
@@ -81,7 +83,7 @@ def train_tracknet(model, optimizer, data_loader, param_dict, exp_name, tb_write
     if param_dict['verbose']:
         data_prob = tqdm(train_loader)
     else:
-        data_prob = data_loader
+        data_prob = train_loader
     
     for step, (_, x, y, c, _) in enumerate(data_prob):
         optimizer.zero_grad()
@@ -126,7 +128,7 @@ def train_tracknet(model, optimizer, data_loader, param_dict, exp_name, tb_write
             if last_only:
                 y = to_img_format(y)
                 y_pred = to_img_format(y_pred[:, -1:, :, :])
-                plot_heatmap_pred_sample(x[0][-1:], y[0][-1:], y_pred[0][-1:], c[0][-1:], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name)
+                plot_heatmap_pred_sample(x[0][-1:], y[0][-1:], y_pred[0][-1:], c[0][-1:], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name, output_type='jpg')
             else:
                 y = to_img_format(y)
                 y_pred = to_img_format(y_pred)
@@ -142,7 +144,7 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=10, help='batch size of training')
     parser.add_argument('--optim', type=str, default='Adam', choices=['Adam', 'SGD', 'Adadelta'], help='optimizer')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='initial learning rate')
-    parser.add_argument('--lr_scheduler', type=str, default='', choices=['', 'StepLR'], help='learning rate scheduler')
+    parser.add_argument('--lr_scheduler', type=str, default='StepLR', choices=['', 'StepLR'], help='learning rate scheduler')
     parser.add_argument('--bg_mode', type=str, default='', choices=['', 'subtract', 'subtract_concat', 'concat'], help='background mode')
     parser.add_argument('--alpha', type=float, default=-1, help='alpha of sample mixup, -1 means no mixup')
     parser.add_argument('--frame_alpha', type=float, default=-1, help='alpha of frame mixup, -1 means no mixup')
@@ -161,6 +163,10 @@ def get_args():
     parser.add_argument('--d_shallow', type=int, default=3, help='image shallow embedding dim')
     parser.add_argument('--d_model', type=int, default=8, help='patch embedding dim')
     parser.add_argument('--depth', type=int, default=2, help='number of mamba blocks')
+    # dataset args
+    parser.add_argument('--heatmap_mode', type=str, default='gaussian', choices=['hard', 'gaussian'], help='heatmap type')
+    parser.add_argument('--sigma', type=float, default=2.5, help='heatmap radius')
+
     args = parser.parse_args()
     
     if args.data_type == 'UniBall':
@@ -168,40 +174,9 @@ def get_args():
     
     return args
 
-# def main():
-#     # TODO: parallel model training
-#     args = get_args()
-#     init_distributed_mode(args)
-#     device = torch.device(args.device)
-#     seed = args.seed + get_rank()
-#     torch.manual_seed(seed)
-#     np.random.seed(seed)
-#     cudnn.benchmark = True
-#     cudnn.deterministic = True
-
-#     param_dict = vars(args)
-#     num_tasks = get_world_size()
-#     global_rank = get_rank()
-
-#     train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
-#     val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
-#     sample_train = DistributedSampler(train_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=True)
-#     if args.dist_eval:
-#         if len(val_dataset) % num_tasks != 0:
-#             print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-#                     'This will slightly alter validation results as extra duplicate entries are added to achieve '
-#                     'equal num of samples per-process.')
-#         sampler_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-#     else:
-#         sample_val = DistributedSampler(val_dataset, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-    
-    
-#     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
-#     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
-
-
-if __name__ == '__main__':
+def main():
     args = get_args()
+    args = init_distributed_mode(args)
     param_dict = vars(args)
 
     np.random.seed(args.seed)
@@ -212,8 +187,12 @@ if __name__ == '__main__':
     if not os.path.exists(args.save_dir):
         os.makedirs(args.save_dir)
     
-    print(f"TensorBoard: start with 'tensorboard --logdir {os.path.join(args.save_dir, 'logs')}', view at http://localhost:6006/")
-    tb_writer = SummaryWriter(os.path.join(args.save_dir, 'logs'))
+    print(f"TensorBoard: start with 'tensorboard --logdir {os.path.join(args.save_dir, 'logs')}'")
+    
+    if args.gpu == 0:
+        tb_writer = SummaryWriter(os.path.join(args.save_dir, 'logs'))
+    else:
+        tb_writer = None
 
     display_step = 4 if args.debug else 100
     num_workers = args.batch_size if args.batch_size <= 16 else 16
@@ -236,12 +215,16 @@ if __name__ == '__main__':
     data_mode = 'heatmap'
     if args.data_type == 'TrackNet':
         train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
-        val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+        val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
     elif args.data_type == 'UniBall':
-        train_dataset = UniBall_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
-        val_dataset = UniBall_Dataset(split='val', seq_len=args.seq_len, sliding_step=args.seq_len, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
+        train_dataset = UniBall_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug, heatmap_mode=args.heatmap_mode)
+        val_dataset = UniBall_Dataset(split='val', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug, heatmap_mode=args.heatmap_mode)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, drop_last=True, pin_memory=True)
+    if args.dist:
+        train_sampler = DistributedSampler(train_dataset)
+    else:
+        train_sampler = None
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, num_workers=num_workers, drop_last=True, pin_memory=True)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, drop_last=False, pin_memory=True)
 
     print(f'Create {args.model_name}...')
@@ -254,14 +237,17 @@ if __name__ == '__main__':
             depth=args.depth,
             seq_len=args.seq_len+1,
         )
-        model = get_model_videomamba(mamba_args).cuda()
+        model = get_model_videomamba(mamba_args)
         exp_name = f'{args.model_name}_p{args.patch_size}_dp{args.d_model}_ds{args.d_shallow}_depth{args.depth}'
     else:
-        model = get_model(args.model_name, args.seq_len, args.bg_mode).cuda()
+        model = get_model(args.model_name, args.seq_len, args.bg_mode)
         exp_name = f'{args.model_name}_{args.data_type}_l{args.seq_len}_{data_mode}_{args.bg_mode}'
     
+    model = model.to(args.gpu)
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print('number of model params:', n_parameters)
+    if args.dist:
+        model = DDP(model, device_ids=[args.gpu], output_device=args.gpu)
 
     # Create optimizer
     if args.optim == 'Adam':
@@ -280,7 +266,7 @@ if __name__ == '__main__':
         scheduler = None
 
     # Init statistics
-    if args.resume_training:
+    if args.resume_training and args.gpu == 0:
         model.load_state_dict(ckpt['model'])
         optimizer.load_state_dict(ckpt['optimizer'])
         if args.lr_scheduler:
@@ -291,6 +277,8 @@ if __name__ == '__main__':
         else:
             max_val_acc = 0.
         print(f'Resume training from epoch {start_epoch}...')
+        if args.dist:
+            dist.broadcast_object_list([model.state_dict(), optimizer.state_dict(), scheduler.state_dict() if scheduler is not None else None], src=0)
     else:
         max_val_acc = 0.
         start_epoch = 0
@@ -302,36 +290,42 @@ if __name__ == '__main__':
     for epoch in range(start_epoch, args.epochs):
         print(f'Epoch [{epoch+1} / {args.epochs}]')
         start_time = time.time()
-        train_loss, curr_step = train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=tb_writer, last_only=args.last_only, curr_step=curr_step)
-        val_loss, val_res = eval_tracknet(model, val_loader, param_dict)
-        write_to_tb(exp_name, tb_writer, (train_loss, val_loss), val_res, epoch, curr_step)
-
-        if args.lr_scheduler:
-            scheduler.step()
+        train_loss, curr_step = train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=tb_writer, last_only=args.last_only, curr_step=curr_step, display_step=display_step)
         
-        # Pick best model
-        cur_val_acc = val_res['accuracy']
-        if cur_val_acc >= max_val_acc:
-            max_val_acc = cur_val_acc
+        if args.gpu == 0:
+            val_loss, val_res = eval_tracknet(model, val_loader, param_dict)
+            write_to_tb(exp_name, tb_writer, (train_loss, val_loss), val_res, epoch, curr_step)
+            # Pick best model
+            cur_val_acc = val_res['accuracy']
+            if cur_val_acc >= max_val_acc:
+                max_val_acc = cur_val_acc
+                torch.save(dict(epoch=epoch,
+                                max_val_acc=max_val_acc,
+                                model=model.state_dict(),
+                                optimizer=optimizer.state_dict(),
+                                scheduler=scheduler.state_dict() if scheduler is not None else None,
+                                param_dict=param_dict),
+                            os.path.join(args.save_dir, f'{args.model_name}_best.pt'))
+            
+            # Save current model
             torch.save(dict(epoch=epoch,
                             max_val_acc=max_val_acc,
                             model=model.state_dict(),
                             optimizer=optimizer.state_dict(),
                             scheduler=scheduler.state_dict() if scheduler is not None else None,
                             param_dict=param_dict),
-                        os.path.join(args.save_dir, f'{args.model_name}_best.pt'))
-        
-        # Save current model
-        torch.save(dict(epoch=epoch,
-                        max_val_acc=max_val_acc,
-                        model=model.state_dict(),
-                        optimizer=optimizer.state_dict(),
-                        scheduler=scheduler.state_dict() if scheduler is not None else None,
-                        param_dict=param_dict),
-                    os.path.join(args.save_dir, f'{args.model_name}_cur.pt'))
+                        os.path.join(args.save_dir, f'{args.model_name}_cur.pt'))
         
         print(f'Epoch runtime: {(time.time() - start_time) / 3600.:.2f} hrs')
+        if args.lr_scheduler:
+            scheduler.step()
     
-    tb_writer.close()
+    if tb_writer is not None:
+        tb_writer.close()
     print(f'Training time: {(time.time() - train_start_time) / 3600.:.2f} hrs')
     print('Done......')
+    if args.dist:
+        dist.destroy_process_group()
+
+if __name__ == '__main__':
+    main()

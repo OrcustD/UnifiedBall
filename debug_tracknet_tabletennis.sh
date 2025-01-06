@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=2 nohup python train.py --data_type UniBall --data_dir data/tabletennis --model_name TrackNet --seq_len 4 --epochs 3 --batch_size 50 --bg_mode concat --alpha -1 --save_dir exp_debug --verbose --last_only --debug > exp_debug.log 2>&1 &
