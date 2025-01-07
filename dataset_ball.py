@@ -98,8 +98,6 @@ class UniBall_Dataset(Dataset):
                     median = np.median(self.frame_arr, 0)
                 if self.bg_mode == 'concat':
                     median = cv2.resize(median, (self.WIDTH, self.HEIGHT))
-                    # median = Image.fromarray(median.astype('uint8'))
-                    # median = np.array(median.resize(size=(self.WIDTH, self.HEIGHT)))
                     self.median = np.moveaxis(median, -1, 0)
                 else:
                     self.median = median
@@ -202,25 +200,24 @@ class UniBall_Dataset(Dataset):
         
         # Construct input sequences, the labeled frames is the last frame of each input sequence
         for i, fid in enumerate(fids):
-            first_index = fid - (self.seq_len-1) * self.sliding_step
-            if first_index < 0:
-                continue
-            # if first_index < 1:
-            #     continue
-            tmp_idx, tmp_frames, tmp_coor, tmp_vis = [], [], [], []
-            # Construct a single input sequence
-            for curr_i in range(first_index, fid+1, self.sliding_step):
-                tmp_idx.append((rally_i, curr_i))
-                tmp_frames.append(os.path.join(rally_dir, f'{curr_i:04d}.{self.img_format}'))
+            tmp_idx = tmp_frames = [] * self.seq_len
+            tmp_coor = tmp_vis = []
+            seq_i = self.seq_len - 1
+            curr_i = fid
+            # if index is out of range, set it to 0
+            for _ in range(self.seq_len):
+                curr_i = max(0, curr_i)
+                tmp_idx[seq_i] = (rally_i, curr_i)
+                tmp_frames[seq_i] = os.path.join(rally_dir, f'{curr_i:04d}.{self.img_format}')
+                curr_i -= self.sliding_step
+                seq_i -= 1
             tmp_coor.append((x[i], y[i]))
             tmp_vis.append(v[i])
-            
-            # Append the input sequence
-            if len(tmp_frames) == self.seq_len:
-                id = np.concatenate((id, [tmp_idx]), axis=0)
-                frame_file = np.concatenate((frame_file, [tmp_frames]), axis=0)
-                coor = np.concatenate((coor, [tmp_coor]), axis=0)
-                vis = np.concatenate((vis, [tmp_vis]), axis=0)
+
+            id = np.concatenate((id, [tmp_idx]), axis=0)
+            frame_file = np.concatenate((frame_file, [tmp_frames]), axis=0)
+            coor = np.concatenate((coor, [tmp_coor]), axis=0)
+            vis = np.concatenate((vis, [tmp_vis]), axis=0)
         
         return dict(id=id, frame_file=frame_file, coor=coor, vis=vis)
 
@@ -232,17 +229,17 @@ class UniBall_Dataset(Dataset):
         h_scaler, w_scaler = h / self.HEIGHT, w / self.WIDTH
 
         id = np.array([], dtype=np.int32).reshape(0, self.seq_len, 2)
+        # if index is out of range, set it to 0
         for i in range(0, len(self.frame_arr), self.sliding_step):
-            first_index = i - self.seq_len * self.sliding_step
-            if first_index < 0:
-                continue
-            tmp_idx = []
-            # Construct a single input sequence
-            for curr_i in range(first_index, i, self.sliding_step):
-                tmp_idx.append((0, curr_i))
-            if len(tmp_idx) == self.seq_len:
-                # Append the input sequence
-                id = np.concatenate((id, [tmp_idx]), axis=0)
+            tmp_idx = [None] * self.seq_len
+            seq_i = self.seq_len - 1
+            curr_i = i
+            for _ in range(self.seq_len):
+                curr_i = max(0, curr_i)
+                tmp_idx[seq_i] = (0, curr_i)
+                curr_i -= self.sliding_step
+                seq_i -= 1
+            id = np.concatenate((id, [tmp_idx]), axis=0)
         return dict(id=id), dict(img_scaler=(w_scaler, h_scaler), img_shape=(w, h))
     
     def _get_heatmap(self, cx, cy):
@@ -286,7 +283,6 @@ class UniBall_Dataset(Dataset):
             median_img = np.load(median_file)['median']
 
         frames = np.array([]).reshape(0, self.HEIGHT, self.WIDTH)
-        heatmaps = np.array([]).reshape(0, self.HEIGHT, self.WIDTH)
         
         # Read image and generate heatmap
         imgs = np.array(load_images(frame_file))
@@ -344,26 +340,19 @@ class UniBall_Dataset(Dataset):
             # Process the frame sequence
             frames = np.array([]).reshape(0, self.HEIGHT, self.WIDTH)
             for i in range(self.seq_len):
-                # img = Image.fromarray(imgs[i])
                 img = imgs[i]
                 if self.bg_mode == 'subtract':
-                    # img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
-                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
                     img = np.sum(np.absolute(img - median_img), 2)
                     img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = img.reshape(1, self.HEIGHT, self.WIDTH)
                 elif self.bg_mode == 'subtract_concat':
-                    # diff_img = Image.fromarray(np.sum(np.absolute(img - median_img), 2).astype('uint8'))
-                    # diff_img = np.array(diff_img.resize(size=(self.WIDTH, self.HEIGHT)))
                     diff_img = np.sum(np.absolute(img - median_img), 2)
                     diff_img = cv2.resize(diff_img, (self.WIDTH, self.HEIGHT))
                     diff_img = diff_img.reshape(1, self.HEIGHT, self.WIDTH)
-                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
                     img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = np.moveaxis(img, -1, 0)
                     img = np.concatenate((img, diff_img), axis=0)
                 else:
-                    # img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
                     img = cv2.resize(img, (self.WIDTH, self.HEIGHT))
                     img = np.moveaxis(img, -1, 0)
                 

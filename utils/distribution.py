@@ -22,7 +22,7 @@ def init_distributed_mode(args):
         dist.init_process_group(backend='nccl')
         args.rank = int(os.environ["RANK"])
         args.world_size = int(os.environ['WORLD_SIZE'])
-        args.gpu = int(os.environ['LOCAL_RANK'])
+        args.gpu = args.local_rank
         args.dist = True
         torch.cuda.set_device(args.gpu)
         torch.distributed.barrier()

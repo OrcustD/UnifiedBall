@@ -95,8 +95,8 @@ def plot_heatmap_pred_sample(x, y, y_pred, c, bg_mode, save_dir, curr_step=None,
     y_m = to_img(y_map)
     
     # Write image sequence to gif
-    if not os.path.exists(f'{save_dir}/{exp_name}'):
-        os.makedirs(f'{save_dir}/{exp_name}')
+    os.makedirs(f'{save_dir}/{exp_name}', exist_ok=True)
+    
     for f in range(c.shape[0]):
         # Convert grayscale image to BGR image for concatenation
         tmp_x = cv2.cvtColor(x[f], cv2.COLOR_GRAY2BGR) if bg_mode == 'subtract' else x[f]

@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from dataset import Shuttlecock_Trajectory_Dataset
 from dataset_ball import UniBall_Dataset
 from test import eval_tracknet
-from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba
+from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba, remove_ddp_prefix
 from utils.metric import WBCELoss
 from utils.visualize import plot_heatmap_pred_sample, plot_traj_pred_sample, write_to_tb
 from utils.distribution import init_distributed_mode
@@ -60,7 +60,7 @@ def get_random_mask(mask_size, mask_ratio):
 
     return mask
 
-def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=None, last_only=False, curr_step=0, display_step=100):
+def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=None, last_only=False, curr_step=0, display_step=100, gpu=0):
     """ Train TrackNet model for one epoch.
 
         Args:
@@ -110,7 +110,7 @@ def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writ
             data_prob.set_postfix(loss=loss.item())
 
         # Visualize current prediction
-        if (step + 1) % display_step == 0:
+        if (step + 1) % display_step == 0 and gpu == 0:
             x, y, y_pred = x.detach().cpu().numpy(), y.detach().cpu().numpy(), y_pred.detach().cpu().numpy()
             c = c.numpy()
             
@@ -166,6 +166,7 @@ def get_args():
     # dataset args
     parser.add_argument('--heatmap_mode', type=str, default='gaussian', choices=['hard', 'gaussian'], help='heatmap type')
     parser.add_argument('--sigma', type=float, default=2.5, help='heatmap radius')
+    parser.add_argument('--local-rank', type=int, default=0, help='local rank for distributed training')
 
     args = parser.parse_args()
     
@@ -183,13 +184,10 @@ def main():
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = True
-
-    if not os.path.exists(args.save_dir):
-        os.makedirs(args.save_dir)
-    
-    print(f"TensorBoard: start with 'tensorboard --logdir {os.path.join(args.save_dir, 'logs')}'")
     
     if args.gpu == 0:
+        os.makedirs(args.save_dir, exist_ok=True)
+        print(f"TensorBoard: start with 'tensorboard --logdir {os.path.join(args.save_dir, 'logs')}'")
         tb_writer = SummaryWriter(os.path.join(args.save_dir, 'logs'))
     else:
         tb_writer = None
@@ -208,7 +206,7 @@ def main():
         ckpt['param_dict']['verbose'] = args.verbose
         ckpt['param_dict']['save_dir'] = args.save_dir
         ckpt['param_dict']['data_dir'] = args.data_dir
-        args = ResumeArgumentParser(ckpt['param_dict'])
+        args = ResumeArgumentParser(args, ckpt['param_dict'])
 
     print(f'Parameters: {param_dict}')
     print(f'Load dataset...')
@@ -262,12 +260,14 @@ def main():
     # Create lr scheduler
     if args.lr_scheduler == 'StepLR':
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=int(args.epochs/3), gamma=0.1)
+    elif args.lr_scheduler == 'cosine':
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     else:
         scheduler = None
 
     # Init statistics
     if args.resume_training and args.gpu == 0:
-        model.load_state_dict(ckpt['model'])
+        model.load_state_dict(remove_ddp_prefix(ckpt['model']))
         optimizer.load_state_dict(ckpt['optimizer'])
         if args.lr_scheduler:
             scheduler.load_state_dict(ckpt['scheduler'])
@@ -290,7 +290,7 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         print(f'Epoch [{epoch+1} / {args.epochs}]')
         start_time = time.time()
-        train_loss, curr_step = train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=tb_writer, last_only=args.last_only, curr_step=curr_step, display_step=display_step)
+        train_loss, curr_step = train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writer=tb_writer, last_only=args.last_only, curr_step=curr_step, display_step=display_step, gpu=args.gpu)
         
         if args.gpu == 0:
             val_loss, val_res = eval_tracknet(model, val_loader, param_dict)

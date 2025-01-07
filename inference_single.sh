@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python inference.py --model_name TrackNet --model_path exp_tt_0106/TrackNet_best.pt --video_path $1

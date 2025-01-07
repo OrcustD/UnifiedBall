@@ -18,3 +18,5 @@ predict_old.py
 data
 exp*
 *.log
+pred_result
+tmp

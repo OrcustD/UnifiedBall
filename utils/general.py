@@ -263,7 +263,7 @@ def generate_frames(video_file):
             
     return frame_list
 
-def draw_traj(img, traj, radius=3, color='red'):
+def draw_traj(img, traj, radius=5, color='red'):
     """ Draw trajectory on the image.
 
         Args:
@@ -350,7 +350,7 @@ def write_pred_video(video_file, pred_dict, save_file, traj_len=8, label_df=None
             frame = draw_traj(frame, gt_queue, color='red')
         
         # Draw prediction trajectory
-        frame = draw_traj(frame, pred_queue, color='yellow')
+        frame = draw_traj(frame, pred_queue, color='green')
 
         out.write(frame)
         i+=1

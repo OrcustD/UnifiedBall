@@ -14,7 +14,7 @@ def load_image(image_path):
         print(f"Error loading image {image_path}: {e}")
         return None
     
-def load_images(image_paths, max_workers=8):
+def load_images_(image_paths, max_workers=8):
     images = [None] * len(image_paths)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_index = {executor.submit(load_image, path): index for index, path in enumerate(image_paths)}
@@ -23,6 +23,14 @@ def load_images(image_paths, max_workers=8):
             image = future.result()
             if image is not None:
                 images[index] = image
+    return images
+
+def load_images(image_paths):
+    images = [None] * len(image_paths)
+    for index, path in enumerate(image_paths):
+        image = load_image(path)
+        if image is not None:
+            images[index] = image
     return images
 
 def load_images_in_parallel(image_dir, max_workers=8):
