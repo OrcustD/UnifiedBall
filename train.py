@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from dataset import Shuttlecock_Trajectory_Dataset
 from dataset_ball import UniBall_Dataset
 from test import eval_tracknet
-from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba, remove_ddp_prefix
+from utils.general import ResumeArgumentParser, get_model, to_img_format, get_model_videomamba, remove_ddp_prefix, merge_args
 from utils.metric import WBCELoss
 from utils.visualize import plot_heatmap_pred_sample, plot_traj_pred_sample, write_to_tb
 from utils.distribution import init_distributed_mode
@@ -76,7 +76,6 @@ def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writ
         Returns:
             (float): Average loss
     """
-
     model.train()
     epoch_loss = []
 
@@ -85,6 +84,8 @@ def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writ
     else:
         data_prob = train_loader
     
+    display_step = min(display_step, len(train_loader))
+
     for step, (_, x, y, c, _) in enumerate(data_prob):
         optimizer.zero_grad()
         x, y = x.float().cuda(), y.float().cuda()
@@ -125,14 +126,15 @@ def train_tracknet(model, optimizer, train_loader, param_dict, exp_name, tb_writ
             else:
                 x = to_img_format(x, num_ch=3)
             
+            vis_idx = np.random.randint(0, x.shape[0])
             if last_only:
                 y = to_img_format(y)
                 y_pred = to_img_format(y_pred[:, -1:, :, :])
-                plot_heatmap_pred_sample(x[0][-1:], y[0][-1:], y_pred[0][-1:], c[0][-1:], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name, output_type='jpg')
+                plot_heatmap_pred_sample(x[vis_idx][-1:], y[vis_idx][-1:], y_pred[vis_idx][-1:], c[vis_idx][-1:], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name, output_type='jpg')
             else:
                 y = to_img_format(y)
                 y_pred = to_img_format(y_pred)
-                plot_heatmap_pred_sample(x[0], y[0], y_pred[0], c[0], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name)
+                plot_heatmap_pred_sample(x[vis_idx], y[vis_idx], y_pred[vis_idx], c[vis_idx], bg_mode=param_dict['bg_mode'], save_dir=param_dict['save_dir'], curr_step=step+curr_step, exp_name=exp_name)
     
     return float(np.mean(epoch_loss)), step+curr_step
 
@@ -155,9 +157,11 @@ def get_args():
     parser.add_argument('--save_dir', type=str, default='exp', help='directory to save the checkpoints and prediction result')
     parser.add_argument('--debug', action='store_true', default=False)
     parser.add_argument('--verbose', action='store_true', default=False)
+    
     parser.add_argument('--data_dir', type=str, default='datasets/TrackNetV2', help='directory of dataset')
     parser.add_argument('--data_type', type=str, default='TrackNet', choices=['TrackNet', 'UniBall'], help='dataset type')
     parser.add_argument('--last_only', action='store_true', default=False, help='only predict last frame result')
+    parser.add_argument('--vis_step', type=int, default=100, help='visualize step')
     # VideoMamba args
     parser.add_argument('--patch_size', type=int, default=8, help='patch size')
     parser.add_argument('--d_shallow', type=int, default=3, help='image shallow embedding dim')
@@ -167,6 +171,7 @@ def get_args():
     parser.add_argument('--heatmap_mode', type=str, default='gaussian', choices=['hard', 'gaussian'], help='heatmap type')
     parser.add_argument('--sigma', type=float, default=2.5, help='heatmap radius')
     parser.add_argument('--local-rank', type=int, default=0, help='local rank for distributed training')
+    parser.add_argument('--port', type=int, default=29500, help='DDP port')
 
     args = parser.parse_args()
     
@@ -192,7 +197,7 @@ def main():
     else:
         tb_writer = None
 
-    display_step = 4 if args.debug else 100
+    display_step = 4 if args.debug else args.vis_step
     num_workers = args.batch_size if args.batch_size <= 16 else 16
     
     # Load checkpoint
@@ -206,7 +211,7 @@ def main():
         ckpt['param_dict']['verbose'] = args.verbose
         ckpt['param_dict']['save_dir'] = args.save_dir
         ckpt['param_dict']['data_dir'] = args.data_dir
-        args = ResumeArgumentParser(args, ckpt['param_dict'])
+        args = merge_args(args, ckpt['param_dict'])
 
     print(f'Parameters: {param_dict}')
     print(f'Load dataset...')
@@ -215,11 +220,11 @@ def main():
         train_dataset = Shuttlecock_Trajectory_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug)
         val_dataset = Shuttlecock_Trajectory_Dataset(split='val', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug)
     elif args.data_type == 'UniBall':
-        train_dataset = UniBall_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug, heatmap_mode=args.heatmap_mode)
-        val_dataset = UniBall_Dataset(split='val', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug, heatmap_mode=args.heatmap_mode)
+        train_dataset = UniBall_Dataset(split='train', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, frame_alpha=args.frame_alpha, debug=args.debug, heatmap_mode=args.heatmap_mode, SIGMA=args.sigma)
+        val_dataset = UniBall_Dataset(split='val', seq_len=args.seq_len, sliding_step=1, data_mode=data_mode, bg_mode=args.bg_mode, debug=args.debug, heatmap_mode=args.heatmap_mode, SIGMA=args.sigma)
 
     if args.dist:
-        train_sampler = DistributedSampler(train_dataset)
+        train_sampler = DistributedSampler(train_dataset, shuffle=True)
     else:
         train_sampler = None
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, num_workers=num_workers, drop_last=True, pin_memory=True)
@@ -239,7 +244,7 @@ def main():
         exp_name = f'{args.model_name}_p{args.patch_size}_dp{args.d_model}_ds{args.d_shallow}_depth{args.depth}'
     else:
         model = get_model(args.model_name, args.seq_len, args.bg_mode)
-        exp_name = f'{args.model_name}_{args.data_type}_l{args.seq_len}_{data_mode}_{args.bg_mode}'
+        exp_name = f'{args.model_name}_{args.data_type}_l{args.seq_len}_{data_mode}_{args.bg_mode}_{args.heatmap_mode}'
     
     model = model.to(args.gpu)
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)

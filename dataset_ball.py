@@ -200,8 +200,8 @@ class UniBall_Dataset(Dataset):
         
         # Construct input sequences, the labeled frames is the last frame of each input sequence
         for i, fid in enumerate(fids):
-            tmp_idx = tmp_frames = [] * self.seq_len
-            tmp_coor = tmp_vis = []
+            tmp_idx, tmp_frames = [None] * self.seq_len, [None] * self.seq_len
+            tmp_coor, tmp_vis = [], []
             seq_i = self.seq_len - 1
             curr_i = fid
             # if index is out of range, set it to 0
@@ -310,8 +310,8 @@ class UniBall_Dataset(Dataset):
 
         # Normalization
         frames /= 255.
-        coor[:, 0] = coor[:, 0] / w
-        coor[:, 1] = coor[:, 1] / h
+        coor[:, 0] = coor[:, 0] / w_scaler
+        coor[:, 1] = coor[:, 1] / h_scaler
         frames = frames.reshape(-1, self.HEIGHT, self.WIDTH)
 
         # return data_idx, frames, heatmap, np.array([coor]), np.array([vis])

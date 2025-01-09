@@ -21,9 +21,14 @@ COOR_TH = DELTA_T * 50
 IMG_FORMAT = 'png'
 
 
+def merge_args(args, param_dict):
+    for k, v in param_dict.items():
+        setattr(args, k, v)
+    return args
+
 class ResumeArgumentParser():
     """ A argument parser for parsing the parameter dictionary from checkpoint file."""
-    def __init__(self, param_dict):
+    def __init__(self, args, param_dict):
         self.model_name = param_dict['model_name']
         self.seq_len = param_dict['seq_len']
         self.epochs = param_dict['epochs']
@@ -574,3 +579,22 @@ def re_generate_median_files(data_dir):
                 get_rally_median(video_file)
             get_match_median(match_dir)
             print(f'Finish processing {match_name}.')
+
+def remove_ddp_prefix(state_dict):
+    """ Remove the DDP prefix from the state_dict.
+
+        Args:
+            state_dict (OrderedDict): State dict of the model
+
+        Returns:
+            state_dict (OrderedDict): State dict without DDP prefix
+    """
+
+    new_state_dict = dict()
+    for k, v in state_dict.items():
+        if k.startswith('module.'):
+            name = k[7:] # remove 'module.' of DataParallel
+            new_state_dict[name] = v
+        else:
+            new_state_dict[k] = v
+    return new_state_dict

@@ -1,7 +1,7 @@
 import os
 import torch
-import subprocess
 import torch.distributed as dist
+import sys
 
 def setup_for_distributed(is_master):
     """
@@ -26,7 +26,8 @@ def init_distributed_mode(args):
         args.dist = True
         torch.cuda.set_device(args.gpu)
         torch.distributed.barrier()
-        setup_for_distributed(args.rank == 0)
+        # args.verbose = (args.verbose and args.rank == 0)
+        setup_for_distributed(args.gpu == 0)
     else:
         args.rank = 0
         args.world_size = 1

@@ -118,7 +118,7 @@
                 "--data_type", "UniBall",
                 "--data_dir", "data/tabletennis",
                 "--model_name", "TrackNet",
-                "--seq_len", "4",
+                "--seq_len", "5",
                 "--epochs", "3",
                 "--batch_size", "10",
                 "--bg_mode", "concat",
@@ -163,11 +163,12 @@
             "module": "torch.distributed.launch",
             "args": [
                 "--nproc_per_node", "2",
+                "--master_port", "29501",
                 "${workspaceFolder}/train.py",
                 "--data_type", "UniBall",
                 "--data_dir", "data/tabletennis",
                 "--model_name", "TrackNet",
-                "--seq_len", "4",
+                "--seq_len", "3",
                 "--epochs", "3",
                 "--batch_size", "4",
                 "--bg_mode", "concat",
@@ -175,10 +176,11 @@
                 "--save_dir", "exp_debug",
                 "--verbose",
                 "--debug",
-                "--last_only"
+                "--last_only",
+                "--port", "29501"
             ],
             "env": {
-                "CUDA_VISIBLE_DEVICES": "1,2"
+                "CUDA_VISIBLE_DEVICES": "0,1"
             },
             "console": "integratedTerminal",
         },
@@ -192,6 +194,30 @@
                 "--model_path", "exp_tt_0106/TrackNet_best.pt",
                 // "--video_path", "data/test_250106/data1_preview/J53097154.jpeg_video.mp4",
                 "--video_path", "data/test_250106/data1_preview/match1_000.mp4",
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0"
+            }
+        },
+        {
+            "name": "Debug Test TableTennis Tracknet",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/eval.py",
+            "args": [
+                "--data_type", "UniBall",
+                "--data_dir", "data/tabletennis",
+                "--model_name", "TrackNet",
+                "--seq_len", "4",
+                "--epochs", "300",
+                "--batch_size", "10",
+                "--bg_mode", "concat",
+                "--alpha", "-1",
+                "--save_dir", "exp_tt_0107",
+                "--verbose",
+                "--debug",
+                "--last_only",
+                "--resume_training"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "0"

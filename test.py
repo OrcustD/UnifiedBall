@@ -77,7 +77,7 @@ def predict_location(heatmap):
 
         return x, y, w, h
 
-def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolerance=4., img_scaler=(1, 1), output_bbox=False, output_gt=False, last_only=False):
+def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, v_true=None, tolerance=4., img_scaler=(1, 1), output_bbox=False, output_gt=False, last_only=False):
     """ Predict and output the result of each frame.
 
         Args:
@@ -102,47 +102,43 @@ def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolera
 
     # Transform input for heatmap prediction
     if y_true is not None and y_pred is not None:
-        assert c_true is None and c_pred is None, 'Invalid input'
         y_true = y_true.detach().cpu().numpy() if torch.is_tensor(y_true) else y_true
         y_pred = y_pred.detach().cpu().numpy() if torch.is_tensor(y_pred) else y_pred
         y_true = to_img_format(y_true) # (N, L, H, W)
         y_pred = to_img_format(y_pred) # (N, L, H, W)
         h_pred = y_pred > 0.5
-    
-    # Transform input for coordinate prediction
-    if c_true is not None and c_pred is not None:
-        assert y_true is None and y_pred is None, 'Invalid input'
-        assert output_bbox == False, 'Coordinate prediction cannot output detection'
-        c_true = c_true.detach().cpu().numpy() if torch.is_tensor(c_true) else c_true
-        c_pred = c_pred.detach().cpu().numpy() if torch.is_tensor(c_pred) else c_pred
-        c_true[..., 0] = c_true[..., 0] * WIDTH
-        c_true[..., 1] = c_true[..., 1] * HEIGHT
-        c_pred[..., 0] = c_pred[..., 0] * WIDTH
-        c_pred[..., 1] = c_pred[..., 1] * HEIGHT
 
     for n in range(batch_size):
         prev_d_i = [-1, -1] # for ignoring the same frame in sequence
         for f in range(seq_len):
             d_i = indices[n][f]
             if d_i != prev_d_i:
-                if c_true is not None and c_pred is not None:
-                    # Predict from coordinate
+                if c_true is not None and y_pred is not None:
+                    # Predict from heatmap
                     c_t = c_true[n][f]
-                    c_p = c_pred[n][f]
+                    v_t = v_true[n][f]
+                    y_p = y_pred[n][f]
+                    h_p = h_pred[n][f]
                     cx_true, cy_true = int(c_t[0]), int(c_t[1])
-                    cx_pred, cy_pred = int(c_p[0]), int(c_p[1])
+                    bbox_pred = predict_location(to_img(h_p))
+                    cx_pred, cy_pred = int(bbox_pred[0]+bbox_pred[2]/2), int(bbox_pred[1]+bbox_pred[3]/2)
+                    if np.amax(bbox_pred) > 0:
+                        conf = np.amax(y_p[bbox_pred[1]:bbox_pred[1]+bbox_pred[3], bbox_pred[0]:bbox_pred[0]+bbox_pred[2]])
+                    else:
+                        conf = 0.
                     vis_pred = 0 if cx_pred == 0 and cy_pred == 0 else 1
-                    if np.amax(c_p) == 0 and np.amax(c_t) == 0:
+                    if vis_pred == 0 and v_t == 0:
                         # True Negative: prediction is no ball, and ground truth is no ball
                         pred_dict['Type'].append(pred_types_map['TN'])
-                    elif np.amax(c_p) > 0 and np.amax(c_t) == 0:
+                    elif vis_pred > 0 and v_t == 0:
                         # False Positive 2: prediction is ball existing, but ground truth is no ball
                         pred_dict['Type'].append(pred_types_map['FP2'])
-                    elif np.amax(c_p) == 0 and np.amax(c_t) > 0:
+                    elif vis_pred == 0 and v_t > 0:
                         # False Negative: prediction is no ball, but ground truth is ball existing
                         pred_dict['Type'].append(pred_types_map['FN'])
-                    elif np.amax(c_p) > 0 and np.amax(c_t) > 0:
+                    elif vis_pred > 0 and v_t > 0:
                         # Both prediction and ground truth are ball existing
+                        # Find center coordinate of the contour with max area as prediction
                         dist = math.sqrt(pow(cx_pred-cx_true, 2)+pow(cy_pred-cy_true, 2))
                         if dist > tolerance:
                             # False Positive 1: prediction is ball existing, but is too far from ground truth
@@ -150,8 +146,6 @@ def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolera
                         else:
                             # True Positive
                             pred_dict['Type'].append(pred_types_map['TP'])
-                    else:
-                        raise ValueError(f'Invalid input: {c_p}, {c_t}')
                 elif y_true is not None and y_pred is not None:
                     # Predict from heatmap
                     y_t = y_true[n][f]
@@ -166,16 +160,16 @@ def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolera
                     else:
                         conf = 0.
                     vis_pred = 0 if cx_pred == 0 and cy_pred == 0 else 1
-                    if np.amax(h_p) == 0 and np.amax(y_t) == 0:
+                    if vis_pred == 0 and v_t == 0:
                         # True Negative: prediction is no ball, and ground truth is no ball
                         pred_dict['Type'].append(pred_types_map['TN'])
-                    elif np.amax(h_p) > 0 and np.amax(y_t) == 0:
+                    elif vis_pred > 0 and v_t == 0:
                         # False Positive 2: prediction is ball existing, but ground truth is no ball
                         pred_dict['Type'].append(pred_types_map['FP2'])
-                    elif np.amax(h_p) == 0 and np.amax(y_t) > 0:
+                    elif vis_pred == 0 and v_t > 0:
                         # False Negative: prediction is no ball, but ground truth is ball existing
                         pred_dict['Type'].append(pred_types_map['FN'])
-                    elif np.amax(h_p) > 0 and np.amax(y_t) > 0:
+                    elif vis_pred > 0 and v_t > 0:
                         # Both prediction and ground truth are ball existing
                         # Find center coordinate of the contour with max area as prediction
                         dist = math.sqrt(pow(cx_pred-cx_true, 2)+pow(cy_pred-cy_true, 2))
@@ -334,7 +328,7 @@ def eval_tracknet(model, data_loader, param_dict):
     else:
         data_prob = data_loader
     
-    for step, (i, x, y, _, _) in enumerate(data_prob):
+    for step, (i, x, y, c, vis) in enumerate(data_prob):
         x, y = x.float().cuda(), y.float().cuda()
         with torch.no_grad():
             y_pred = model(x)
@@ -347,7 +341,7 @@ def eval_tracknet(model, data_loader, param_dict):
         loss = WBCELoss(y_pred, y)
         losses.append(loss.item())
 
-        pred_dict = evaluate(i_, y_true=y, y_pred=y_pred, tolerance=param_dict['tolerance'])
+        pred_dict = evaluate(i_, y_true=y, y_pred=y_pred, c_true=c, v_true=vis, tolerance=param_dict['tolerance'])
         confusion_matrix += get_eval_res(pred_dict)
         
         if param_dict['verbose']:
@@ -389,57 +383,7 @@ def eval_inpaintnet(model, data_loader, param_dict):
                         'miss_rate': miss_rate}
     """
 
-    model.eval()
-    losses = []
-    confusion_matrix = {eval_type: np.zeros(5) for eval_type in inpaintnet_eval_types} # TP, TN, FP1, FP2, FN
-    if param_dict['verbose']:
-        data_prob = tqdm(data_loader)
-    else:
-        data_prob = data_loader
-
-    for step, (i, coor_pred, coor, _, _, inpaint_mask) in enumerate(data_prob):
-        coor_pred, coor, inpaint_mask = coor_pred.float().cuda(), coor.float().cuda(), inpaint_mask.float().cuda()
-        
-        with torch.no_grad():
-            coor_inpaint = model(coor_pred, inpaint_mask)
-            coor_inpaint = coor_inpaint * inpaint_mask + coor_pred * (1-inpaint_mask)
-            
-            loss = nn.MSELoss()(coor_inpaint * inpaint_mask, coor * inpaint_mask)
-            losses.append(loss.item())
-
-            # Thresholding
-            th_mask = ((coor_inpaint[:, :, 0] < COOR_TH) & (coor_inpaint[:, :, 1] < COOR_TH))
-            coor_inpaint[th_mask] = 0.
-        
-        for eval_type in inpaintnet_eval_types:
-            if eval_type == 'inpaint':
-                pred_dict = evaluate(i, c_true=coor, c_pred=coor_inpaint, tolerance=param_dict['tolerance'])
-            elif eval_type == 'reconstruct':
-                pred_dict = evaluate(i, c_true=coor_pred, c_pred=coor_inpaint, tolerance=param_dict['tolerance'])
-            elif eval_type == 'baseline':
-                pred_dict = evaluate(i, c_true=coor, c_pred=coor_pred, tolerance=param_dict['tolerance'])
-            else:
-                raise ValueError('Invalid eval_type')
-            confusion_matrix[eval_type] += get_eval_res(pred_dict)
-        
-        if param_dict['verbose']:
-            TP, TN, FP1, FP2, FN = confusion_matrix['inpaint']
-            data_prob.set_description(f'Evaluation')
-            data_prob.set_postfix(TP=TP, TN=TN, FP1=FP1, FP2=FP2, FN=FN)
-    
-    res_dict = {}
-    for eval_type in inpaintnet_eval_types:
-        TP, TN, FP1, FP2, FN = confusion_matrix[eval_type]
-        accuracy, precision, recall, f1, miss_rate = get_metric(TP, TN, FP1, FP2, FN)
-        res_dict[eval_type] = {'TP': TP, 'TN': TN,
-                               'FP1': FP1, 'FP2': FP2, 'FN': FN,
-                               'accuracy': accuracy,
-                               'precision': precision,
-                               'recall': recall,
-                               'f1': f1,
-                               'miss_rate': miss_rate}
-    
-    return float(np.mean(losses)), res_dict
+    pass
 
 # For testing evaluation
 def get_coco_res(pred_dict, data_dir, drop=False):
@@ -619,13 +563,13 @@ def test_rally(model, rally_dir, param_dict, save_inpaint_mask=False):
             data_loader = DataLoader(dataset, batch_size=param_dict['batch_size'], shuffle=False, num_workers=param_dict['num_workers'], drop_last=False)
             
             data_prob = tqdm(data_loader) if param_dict['verbose'] else data_loader
-            for step, (i, x, y, _, _) in enumerate(data_prob):
+            for step, (i, x, y, c, _) in enumerate(data_prob):
                 x = x.float().cuda()
                 with torch.no_grad():
                     y_pred = tracknet(x).detach().cpu()
                 
                 # Predict
-                tmp_pred = evaluate(i, y_true=y, y_pred=y_pred,
+                tmp_pred = evaluate(i, y_true=y, y_pred=y_pred, c_true=c,
                                     tolerance=param_dict['tolerance'],
                                     img_scaler=(w_scaler, h_scaler),
                                     output_bbox=param_dict['output_bbox'],
@@ -697,103 +641,6 @@ def test_rally(model, rally_dir, param_dict, save_inpaint_mask=False):
         
         tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(tracknet_pred_dict, th_h=30)
         return tracknet_pred_dict
-    else:
-        # Test on TrackNetV3 (TrackNet + InpaintNet)
-        inpaintnet.eval()
-        seq_len = param_dict['inpaintnet_seq_len']
-        inpaintnet_pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[], 'Type':[]}
-
-        if param_dict['eval_mode'] == 'nonoverlap':
-            # Create dataset with non-overlap sampling
-            dataset = Shuttlecock_Trajectory_Dataset(seq_len=seq_len, sliding_step=seq_len, data_mode='coordinate', rally_dir=rally_dir, padding=True)
-            data_loader = DataLoader(dataset, batch_size=param_dict['batch_size'], shuffle=False, num_workers=param_dict['num_workers'], drop_last=False)
-
-            data_prob = tqdm(data_loader) if param_dict['verbose'] else data_loader
-            for step, (i, coor_pred, coor, _, _, inpaint_mask) in enumerate(data_prob):
-                coor_pred, coor, inpaint_mask = coor_pred.float(), coor.float(), inpaint_mask.float()
-                with torch.no_grad():
-                    coor_inpaint = inpaintnet(coor_pred.cuda(), inpaint_mask.cuda()).detach().cpu()
-                    coor_inpaint = coor_inpaint * inpaint_mask + coor_pred * (1-inpaint_mask) # replace predicted coordinates with inpainted coordinates
-                
-                # Thresholding
-                th_mask = ((coor_inpaint[:, :, 0] < COOR_TH) & (coor_inpaint[:, :, 1] < COOR_TH))
-                coor_inpaint[th_mask] = 0.
-                
-                # Predict
-                tmp_pred = evaluate(i, c_true=coor, c_pred=coor_inpaint, tolerance=param_dict['tolerance'], img_scaler=(w_scaler, h_scaler))
-                for key in tmp_pred.keys():
-                    inpaintnet_pred_dict[key].extend(tmp_pred[key])
-        else:
-            # Create dataset with overlap sampling for temporal ensemble
-            dataset = Shuttlecock_Trajectory_Dataset(seq_len=seq_len, sliding_step=1, data_mode='coordinate', rally_dir=rally_dir)
-            data_loader = DataLoader(dataset, batch_size=param_dict['batch_size'], shuffle=False, num_workers=param_dict['num_workers'], drop_last=False)
-            weight = get_ensemble_weight(seq_len, param_dict['eval_mode'])
-
-            # Init buffer params
-            num_sample, sample_count = len(dataset), 0
-            buffer_size = seq_len - 1
-            batch_i = torch.arange(seq_len) # [0, 1, 2, 3, 4, 5, 6, 7]
-            frame_i = torch.arange(seq_len-1, -1, -1) # [7, 6, 5, 4, 3, 2, 1, 0]
-            coor_inpaint_buffer = torch.zeros((buffer_size, seq_len, 2), dtype=torch.float32)
-
-            data_prob = tqdm(data_loader) if param_dict['verbose'] else data_loader
-            for step, (i, coor_pred, coor, _, _, inpaint_mask) in enumerate(data_prob):
-                coor_pred, coor, inpaint_mask = coor_pred.float(), coor.float(), inpaint_mask.float()
-                b_size = i.shape[0]
-                with torch.no_grad():
-                    coor_inpaint = inpaintnet(coor_pred.cuda(), inpaint_mask.cuda()).detach().cpu()
-                    coor_inpaint = coor_inpaint * inpaint_mask + coor_pred * (1 - inpaint_mask) # replace predicted coordinates with inpainted coordinates
-                
-                # Thresholding
-                th_mask = ((coor_inpaint[:, :, 0] < COOR_TH) & (coor_inpaint[:, :, 1] < COOR_TH))
-                coor_inpaint[th_mask] = 0.
-
-                coor_inpaint_buffer = torch.cat((coor_inpaint_buffer, coor_inpaint), dim=0)
-                ensemble_i = torch.empty((0, 1, 2), dtype=torch.float32)
-                ensemble_coor = torch.empty((0, 1, 2), dtype=torch.float32)
-                ensemble_coor_inpaint = torch.empty((0, 1, 2), dtype=torch.float32)
-                
-                for b in range(b_size):
-                    if sample_count < buffer_size:
-                        # Imcomplete buffer
-                        coor_inpaint = coor_inpaint_buffer[batch_i+b, frame_i].sum(0)
-                        coor_inpaint /= (sample_count+1)  
-                    else:
-                        # General case
-                        coor_inpaint = (coor_inpaint_buffer[batch_i+b, frame_i] * weight[:, None]).sum(0)
-                    
-                    ensemble_i = torch.cat((ensemble_i, i[b][0].view(1, 1, 2)), dim=0)
-                    ensemble_coor = torch.cat((ensemble_coor, coor[b][0].view(1, 1, 2)), dim=0)
-                    ensemble_coor_inpaint = torch.cat((ensemble_coor_inpaint, coor_inpaint.view(1, 1, 2)), dim=0)
-                    sample_count += 1
-                
-                    if sample_count == num_sample:
-                        # Last input sequence
-                        coor_zero_pad = torch.zeros((buffer_size, seq_len, 2), dtype=torch.float32)
-                        coor_inpaint_buffer = torch.cat((coor_inpaint_buffer, coor_zero_pad), dim=0)
-                        
-                        for f in range(1, seq_len):
-                            coor_inpaint = coor_inpaint_buffer[batch_i+b+f, frame_i].sum(0)
-                            coor_inpaint /= (seq_len-f)
-                            ensemble_i = torch.cat((ensemble_i, i[b][f].view(1, 1, 2)), dim=0)
-                            ensemble_coor = torch.cat((ensemble_coor, coor[b][f].view(1, 1, 2)), dim=0)
-                            ensemble_coor_inpaint = torch.cat((ensemble_coor_inpaint, coor_inpaint.view(1, 1, 2)), dim=0)
-                
-                # Thresholding
-                th_mask = ((ensemble_coor_inpaint[:, :, 0] < COOR_TH) & (ensemble_coor_inpaint[:, :, 1] < COOR_TH))
-                ensemble_coor_inpaint[th_mask] = 0.
-
-                # Predict
-                tmp_pred = evaluate(ensemble_i, c_true=ensemble_coor, c_pred=ensemble_coor_inpaint,
-                                    tolerance=param_dict['tolerance'],
-                                    img_scaler=(w_scaler, h_scaler))
-                for key in tmp_pred.keys():
-                    inpaintnet_pred_dict[key].extend(tmp_pred[key])
-
-                # Update buffer, keep last predictions for ensemble in next iteration
-                coor_inpaint_buffer = coor_inpaint_buffer[-buffer_size:]
-
-        return inpaintnet_pred_dict
         
 def test_rally_linear(model, rally_dir, param_dict):
     tracknet, _ = model
